@@ -13,7 +13,11 @@ app.use(cors())
 app.use(helmet())
 app.use(express.json())
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 })
+const limiter = rateLimit({ 
+  windowMs: 15 * 60 * 1000, 
+  max: 100,
+  validate: { xForwardedForHeader: false }
+})
 app.use(limiter)
 
 const pool = new Pool({
@@ -21,7 +25,8 @@ const pool = new Pool({
   port: process.env.DB_PORT,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME
+  database: process.env.DB_NAME,
+  ssl: { rejectUnauthorized: false }
 })
 
 app.post('/login', async (req, res) => {
@@ -166,7 +171,6 @@ app.post('/workflows/:id/activites', verifierToken, async (req, res) => {
      VALUES ($1, $2, $3, $4, $3, 1, 'ADMIN')`,
     [wkfActId, req.params.id, actId, actnum]
   )
-
 
   const result = await pool.query(
     'SELECT * FROM admpcs.processus_activite WHERE act_id = $1', [actId]
