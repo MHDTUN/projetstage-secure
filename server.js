@@ -73,10 +73,11 @@ app.post('/processus', verifierToken, async (req, res) => {
   const { pcsnom, pcsrspgrp } = req.body
   const nextId = await pool.query("SELECT nextval('admpcs.seq_processus') as id")
   const id = parseInt(nextId.rows[0].id)
+  const pcsnum = 'PCS-' + id
   const result = await pool.query(
     `INSERT INTO admpcs.processus (pcs_id, pcsnum, pcsnumcrt, pcsnom, pcsstu, pcsrspgrp)
-     VALUES ($1, 'PCS-' || $1, $1, $2, 'ACT', $3) RETURNING *`,
-    [id, pcsnom, pcsrspgrp]
+     VALUES ($1, $2, $1, $3, 'ACT', $4) RETURNING *`,
+    [id, pcsnum, pcsnom, pcsrspgrp]
   )
   res.json(result.rows[0])
 })
@@ -107,10 +108,11 @@ app.post('/processus/:id/workflows', verifierToken, async (req, res) => {
   const { wkfnom } = req.body
   const nextId = await pool.query("SELECT nextval('admpcs.seq_workflow') as id")
   const id = parseInt(nextId.rows[0].id)
+  const wkfnum = 'WKF-' + id
   const result = await pool.query(
     `INSERT INTO admpcs.workflow (wkf_id, pcs_id, wkfnum, wkfnumcrt, wkfnom, wkfrspgrp)
-     VALUES ($1, $2, 'WKF-' || $1, $1, $3, 'ADMIN') RETURNING *`,
-    [id, req.params.id, wkfnom]
+     VALUES ($1, $2, $3, $1, $4, 'ADMIN') RETURNING *`,
+    [id, req.params.id, wkfnum, wkfnom]
   )
   res.json(result.rows[0])
 })
