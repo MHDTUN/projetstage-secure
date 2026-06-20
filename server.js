@@ -29,7 +29,10 @@ const pool = new Pool({
   ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false
 })
 
+// ============================================================================
 // AUTH
+// ============================================================================
+
 app.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body
@@ -63,7 +66,10 @@ function verifierToken(req, res, next) {
   })
 }
 
+// ============================================================================
 // PROCESSUS
+// ============================================================================
+
 app.get('/processus', verifierToken, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM admpcs.processus ORDER BY pcsnum')
@@ -86,7 +92,8 @@ app.post('/processus', verifierToken, async (req, res) => {
 app.put('/processus/:id', verifierToken, async (req, res) => {
   try {
     const { pcsnom, pcsdsc, pcsrspgrp } = req.body
-    await pool.query('SELECT admpcs.app_upd_processus($1, $2, $3, $4)', [req.params.id, pcsnom, pcsdsc || null, pcsrspgrp || 'ADMIN'])
+    await pool.query('SELECT admpcs.app_upd_processus($1, $2, $3, $4)',
+      [req.params.id, pcsnom, pcsdsc || null, pcsrspgrp || 'ADMIN'])
     const pcs = await pool.query('SELECT * FROM admpcs.processus WHERE pcs_id = $1', [req.params.id])
     res.json(pcs.rows[0])
   } catch (err) { res.status(500).json({ message: err.message }) }
@@ -99,10 +106,14 @@ app.delete('/processus/:id', verifierToken, async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }) }
 })
 
+// ============================================================================
 // WORKFLOW
+// ============================================================================
+
 app.get('/processus/:id/workflows', verifierToken, async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM admpcs.workflow WHERE pcs_id = $1 ORDER BY wkfnum', [req.params.id])
+    const result = await pool.query(
+      'SELECT * FROM admpcs.workflow WHERE pcs_id = $1 ORDER BY wkfnum', [req.params.id])
     res.json(result.rows)
   } catch (err) { res.status(500).json({ message: err.message }) }
 })
@@ -121,8 +132,11 @@ app.post('/processus/:id/workflows', verifierToken, async (req, res) => {
 
 app.put('/workflows/:id', verifierToken, async (req, res) => {
   try {
-    const { pcs_id, wkfnom, wkfrspgrp, wkfistuni } = req.body
-    await pool.query('SELECT admpcs.app_upd_workflow($1, $2, $3, $4, $5)', [pcs_id, req.params.id, wkfnom, wkfrspgrp || 'ADMIN', wkfistuni ?? 0])
+    const { wkfnom, wkfrspgrp, wkfistuni } = req.body
+    // On récupère le pcs_id automatiquement
+    const w = await pool.query('SELECT pcs_id FROM admpcs.workflow WHERE wkf_id = $1', [req.params.id])
+    await pool.query('SELECT admpcs.app_upd_workflow($1, $2, $3, $4, $5)',
+      [w.rows[0].pcs_id, req.params.id, wkfnom, wkfrspgrp || 'ADMIN', wkfistuni ?? 0])
     const wkf = await pool.query('SELECT * FROM admpcs.workflow WHERE wkf_id = $1', [req.params.id])
     res.json(wkf.rows[0])
   } catch (err) { res.status(500).json({ message: err.message }) }
@@ -130,31 +144,41 @@ app.put('/workflows/:id', verifierToken, async (req, res) => {
 
 app.delete('/workflows/:id', verifierToken, async (req, res) => {
   try {
-    const r = await pool.query('SELECT pcs_id FROM admpcs.workflow WHERE wkf_id = $1', [req.params.id])
-    await pool.query('SELECT admpcs.app_del_workflow($1, $2)', [r.rows[0].pcs_id, req.params.id])
+    const w = await pool.query('SELECT pcs_id FROM admpcs.workflow WHERE wkf_id = $1', [req.params.id])
+    await pool.query('SELECT admpcs.app_del_workflow($1, $2)', [w.rows[0].pcs_id, req.params.id])
     res.json({ message: 'Supprimé' })
   } catch (err) { res.status(500).json({ message: err.message }) }
 })
 
+// ============================================================================
 // ACTIVITES
+// ============================================================================
+
 app.get('/workflows/:id/activites', verifierToken, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT pa.* FROM admpcs.processus_activite pa
        JOIN admpcs.workflow_activite wa ON wa.act_id = pa.act_id
-       WHERE wa.wkf_id = $1 ORDER BY pa.actnumord`,
-      [req.params.id]
-    )
+       WHERE wa.wkf_id = $1 ORDER BY pa.actnumord`, [req.params.id])
     res.json(result.rows)
   } catch (err) { res.status(500).json({ message: err.message }) }
 })
 
 app.post('/workflows/:id/activites', verifierToken, async (req, res) => {
   try {
-    const { actnom, actnumord, pcsjal, pcs_id } = req.body
+    const { actnom, actnumord, pcsjal } = req.body
+    // On récupère le pcs_id automatiquement depuis le workflow
+    const w = await pool.query('SELECT pcs_id FROM admpcs.workflow WHERE wkf_id = $1', [req.params.id])
+    const pcs_id = w.rows[0].pcs_id
+
+    // On calcule le numéro d'ordre si non fourni
+    const ord = await pool.query(
+      'SELECT COALESCE(MAX(actnumord), 0) + 1 AS next FROM admpcs.processus_activite WHERE pcs_id = $1', [pcs_id])
+    const num = actnumord || ord.rows[0].next
+
     const r = await pool.query(
       `SELECT * FROM admpcs.app_ins_activite($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-      [pcs_id, req.params.id, 1, actnumord || 1, actnom, null, null, null, null, null, null, pcsjal || null, null]
+      [pcs_id, req.params.id, 1, num, actnom, null, null, null, null, null, null, pcsjal || null, null]
     )
     const act = await pool.query('SELECT * FROM admpcs.processus_activite WHERE act_id = $1', [r.rows[0].p_act_id])
     res.json(act.rows[0])
@@ -163,10 +187,18 @@ app.post('/workflows/:id/activites', verifierToken, async (req, res) => {
 
 app.put('/activites/:id', verifierToken, async (req, res) => {
   try {
-    const { pcs_id, wkf_id, actnom, actnumord, pcsjal, wkfactacv, wkfactdsc, wkfactrspgrp, wkfactitvgrp, wkfactdel, wkfactdeluni } = req.body
+    const { actnom, actnumord, pcsjal, wkfactacv, wkfactdsc, wkfactrspgrp, wkfactitvgrp, wkfactdel, wkfactdeluni } = req.body
+    // On récupère pcs_id et wkf_id automatiquement
+    const pa = await pool.query('SELECT * FROM admpcs.processus_activite WHERE act_id = $1', [req.params.id])
+    const wa = await pool.query('SELECT * FROM admpcs.workflow_activite WHERE act_id = $1 LIMIT 1', [req.params.id])
+    const pcs_id = pa.rows[0].pcs_id
+    const wkf_id = wa.rows[0].wkf_id
+
     await pool.query(
       `SELECT admpcs.app_upd_activite($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-      [pcs_id, wkf_id, req.params.id, wkfactacv ?? 1, actnumord, actnom, null, wkfactdsc || null, wkfactrspgrp || null, wkfactitvgrp || null, wkfactdel || null, wkfactdeluni || null, pcsjal || null, null]
+      [pcs_id, wkf_id, req.params.id, wkfactacv ?? 1, actnumord || pa.rows[0].actnumord,
+       actnom, null, wkfactdsc || null, wkfactrspgrp || null, wkfactitvgrp || null,
+       wkfactdel || null, wkfactdeluni || null, pcsjal || null, null]
     )
     const act = await pool.query('SELECT * FROM admpcs.processus_activite WHERE act_id = $1', [req.params.id])
     res.json(act.rows[0])
@@ -175,13 +207,19 @@ app.put('/activites/:id', verifierToken, async (req, res) => {
 
 app.delete('/activites/:id', verifierToken, async (req, res) => {
   try {
-    const { pcs_id, wkf_id } = req.body
-    await pool.query('SELECT admpcs.app_del_activite($1, $2, $3)', [pcs_id, wkf_id, req.params.id])
+    // On récupère pcs_id et wkf_id automatiquement
+    const pa = await pool.query('SELECT pcs_id FROM admpcs.processus_activite WHERE act_id = $1', [req.params.id])
+    const wa = await pool.query('SELECT wkf_id FROM admpcs.workflow_activite WHERE act_id = $1 LIMIT 1', [req.params.id])
+    await pool.query('SELECT admpcs.app_del_activite($1, $2, $3)',
+      [pa.rows[0].pcs_id, wa.rows[0].wkf_id, req.params.id])
     res.json({ message: 'Supprimé' })
   } catch (err) { res.status(500).json({ message: err.message }) }
 })
 
+// ============================================================================
 // WORKFLOW_INFO
+// ============================================================================
+
 app.get('/workflows/:id/infos', verifierToken, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM admpcs.workflow_info WHERE wkf_id = $1', [req.params.id])
@@ -191,10 +229,11 @@ app.get('/workflows/:id/infos', verifierToken, async (req, res) => {
 
 app.post('/workflows/:id/infos', verifierToken, async (req, res) => {
   try {
-    const { pcs_id, wkfinfnom, wkfinftyp, wkfinfval, wkfinfmlt } = req.body
+    const { wkfinfnom, wkfinftyp, wkfinfval, wkfinfmlt } = req.body
+    const w = await pool.query('SELECT pcs_id FROM admpcs.workflow WHERE wkf_id = $1', [req.params.id])
     const r = await pool.query(
       'SELECT admpcs.app_ins_workflow_info($1, $2, $3, $4, $5, $6) AS wkfinf_id',
-      [pcs_id, req.params.id, wkfinfnom, wkfinftyp, wkfinfval || null, wkfinfmlt ?? 0]
+      [w.rows[0].pcs_id, req.params.id, wkfinfnom, wkfinftyp, wkfinfval || null, wkfinfmlt ?? 0]
     )
     const info = await pool.query('SELECT * FROM admpcs.workflow_info WHERE wkfinf_id = $1', [r.rows[0].wkfinf_id])
     res.json(info.rows[0])
@@ -203,16 +242,22 @@ app.post('/workflows/:id/infos', verifierToken, async (req, res) => {
 
 app.delete('/infos/:id', verifierToken, async (req, res) => {
   try {
-    const { pcs_id, wkf_id } = req.body
-    await pool.query('SELECT admpcs.app_del_workflow_info($1, $2, $3)', [pcs_id, wkf_id, req.params.id])
+    const info = await pool.query('SELECT wkf_id FROM admpcs.workflow_info WHERE wkfinf_id = $1', [req.params.id])
+    const w = await pool.query('SELECT pcs_id FROM admpcs.workflow WHERE wkf_id = $1', [info.rows[0].wkf_id])
+    await pool.query('SELECT admpcs.app_del_workflow_info($1, $2, $3)',
+      [w.rows[0].pcs_id, info.rows[0].wkf_id, req.params.id])
     res.json({ message: 'Supprimé' })
   } catch (err) { res.status(500).json({ message: err.message }) }
 })
 
+// ============================================================================
 // SOUS_PROCESSUS
+// ============================================================================
+
 app.get('/processus/:id/sous-processus', verifierToken, async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM admpcs.sous_processus WHERE pcs_id = $1 ORDER BY soupcsnum', [req.params.id])
+    const result = await pool.query(
+      'SELECT * FROM admpcs.sous_processus WHERE pcs_id = $1 ORDER BY soupcsnum', [req.params.id])
     res.json(result.rows)
   } catch (err) { res.status(500).json({ message: err.message }) }
 })
@@ -231,19 +276,25 @@ app.post('/processus/:id/sous-processus', verifierToken, async (req, res) => {
 
 app.delete('/sous-processus/:id', verifierToken, async (req, res) => {
   try {
-    const { pcs_id } = req.body
-    await pool.query('SELECT admpcs.app_del_sous_processus($1, $2)', [pcs_id, req.params.id])
+    const sp = await pool.query('SELECT pcs_id FROM admpcs.sous_processus WHERE soupcs_id = $1', [req.params.id])
+    await pool.query('SELECT admpcs.app_del_sous_processus($1, $2)', [sp.rows[0].pcs_id, req.params.id])
     res.json({ message: 'Supprimé' })
   } catch (err) { res.status(500).json({ message: err.message }) }
 })
 
+// ============================================================================
 // CONTRAINTES
+// ============================================================================
+
 app.post('/contraintes', verifierToken, async (req, res) => {
   try {
-    const { pcs_id, wkf_id, maiwkfact_id, filwkfact_id, lietyp, wkfactctracv, wkfactctrdel, wkfactctrdeluni } = req.body
+    const { maiwkfact_id, filwkfact_id, lietyp, wkfactctracv, wkfactctrdel, wkfactctrdeluni } = req.body
+    const wa = await pool.query('SELECT wkf_id FROM admpcs.workflow_activite WHERE wkfact_id = $1', [maiwkfact_id])
+    const w = await pool.query('SELECT pcs_id FROM admpcs.workflow WHERE wkf_id = $1', [wa.rows[0].wkf_id])
     const r = await pool.query(
       'SELECT admpcs.app_ins_act_contrainte($1, $2, $3, $4, $5, $6, $7, $8) AS actctr_id',
-      [pcs_id, wkf_id, maiwkfact_id, filwkfact_id, lietyp || 'FD', wkfactctracv ?? 1, wkfactctrdel ?? 0, wkfactctrdeluni || 'JOU']
+      [w.rows[0].pcs_id, wa.rows[0].wkf_id, maiwkfact_id, filwkfact_id,
+       lietyp || 'FD', wkfactctracv ?? 1, wkfactctrdel ?? 0, wkfactctrdeluni || 'JOU']
     )
     res.json({ actctr_id: r.rows[0].actctr_id })
   } catch (err) { res.status(500).json({ message: err.message }) }
