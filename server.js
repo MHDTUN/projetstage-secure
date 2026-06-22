@@ -33,7 +33,6 @@ const pool = new Pool({
 // HELPERS
 // ============================================================================
 
-// Wrapper qui gère les try/catch automatiquement — évite la répétition partout
 const route = (handler) => async (req, res) => {
   try {
     await handler(req, res)
@@ -43,15 +42,34 @@ const route = (handler) => async (req, res) => {
   }
 }
 
-// Statuts autorisés
 const STATUTS = ['ACTIF', 'TERMINE']
 const validStatut = (s) => STATUTS.includes(s)
 
+// Réordonnement générique en transaction
+async function reordonner(table, colId, colOrdre, ordre) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    for (let i = 0; i < ordre.length; i++) {
+      await client.query(
+        `UPDATE admpcs.${table} SET ${colOrdre} = $1 WHERE ${colId} = $2`,
+        [i + 1, ordre[i]]
+      )
+    }
+    await client.query('COMMIT')
+  } catch (e) {
+    await client.query('ROLLBACK')
+    throw e
+  } finally {
+    client.release()
+  }
+}
+
 // ============================================================================
-// HEALTH CHECK (utile pour réveiller Render et vérifier la base)
+// HEALTH CHECK
 // ============================================================================
 
-app.get('/', (req, res) => res.json({ status: 'ok', service: 'PCS API', version: '2.0' }))
+app.get('/', (req, res) => res.json({ status: 'ok', service: 'PCS API', version: '2.1' }))
 
 app.get('/health', route(async (req, res) => {
   const db = await pool.query('SELECT NOW() AS now')
@@ -101,8 +119,16 @@ function verifierToken(req, res, next) {
 // ============================================================================
 
 app.get('/processus', verifierToken, route(async (req, res) => {
-  const result = await pool.query('SELECT * FROM admpcs.processus ORDER BY pcsnum')
+  const result = await pool.query('SELECT * FROM admpcs.processus ORDER BY ordre NULLS LAST, pcsnum')
   res.json(result.rows)
+}))
+
+// IMPORTANT : route /ordre AVANT /:id sinon Express confond "ordre" avec un id
+app.patch('/processus/ordre', verifierToken, route(async (req, res) => {
+  const { ordre } = req.body
+  if (!Array.isArray(ordre)) return res.status(400).json({ message: 'Liste ordre requise' })
+  await reordonner('processus', 'pcs_id', 'ordre', ordre)
+  res.json({ message: 'Ordre mis à jour' })
 }))
 
 app.post('/processus', verifierToken, route(async (req, res) => {
@@ -124,7 +150,6 @@ app.put('/processus/:id', verifierToken, route(async (req, res) => {
   res.json(pcs.rows[0])
 }))
 
-// Changement de statut (ACTIF / TERMINE) — écrit directement dans la colonne statut
 app.patch('/processus/:id/statut', verifierToken, route(async (req, res) => {
   const { statut } = req.body
   if (!validStatut(statut)) return res.status(400).json({ message: 'Statut invalide' })
@@ -144,8 +169,16 @@ app.delete('/processus/:id', verifierToken, route(async (req, res) => {
 
 app.get('/processus/:id/workflows', verifierToken, route(async (req, res) => {
   const result = await pool.query(
-    'SELECT * FROM admpcs.workflow WHERE pcs_id = $1 ORDER BY wkfnum', [req.params.id])
+    'SELECT * FROM admpcs.workflow WHERE pcs_id = $1 ORDER BY ordre NULLS LAST, wkfnum', [req.params.id])
   res.json(result.rows)
+}))
+
+// IMPORTANT : route /ordre AVANT /:id
+app.patch('/workflows/ordre', verifierToken, route(async (req, res) => {
+  const { ordre } = req.body
+  if (!Array.isArray(ordre)) return res.status(400).json({ message: 'Liste ordre requise' })
+  await reordonner('workflow', 'wkf_id', 'ordre', ordre)
+  res.json({ message: 'Ordre mis à jour' })
 }))
 
 app.post('/processus/:id/workflows', verifierToken, route(async (req, res) => {
@@ -194,6 +227,14 @@ app.get('/workflows/:id/activites', verifierToken, route(async (req, res) => {
   res.json(result.rows)
 }))
 
+// Réordonnement activités
+app.patch('/workflows/:id/activites/ordre', verifierToken, route(async (req, res) => {
+  const { ordre } = req.body
+  if (!Array.isArray(ordre)) return res.status(400).json({ message: 'Liste ordre requise' })
+  await reordonner('processus_activite', 'act_id', 'actnumord', ordre)
+  res.json({ message: 'Ordre mis à jour' })
+}))
+
 app.post('/workflows/:id/activites', verifierToken, route(async (req, res) => {
   const { actnom, actnumord, pcsjal } = req.body
   if (!actnom || !actnom.trim()) return res.status(400).json({ message: 'Nom requis' })
@@ -232,26 +273,6 @@ app.patch('/activites/:id/statut', verifierToken, route(async (req, res) => {
   await pool.query('UPDATE admpcs.processus_activite SET statut = $1 WHERE act_id = $2', [statut, req.params.id])
   const act = await pool.query('SELECT * FROM admpcs.processus_activite WHERE act_id = $1', [req.params.id])
   res.json(act.rows[0])
-}))
-
-// Réordonnement — reçoit une liste d'ids dans le nouvel ordre et met à jour actnumord
-app.patch('/workflows/:id/activites/ordre', verifierToken, route(async (req, res) => {
-  const { ordre } = req.body // ex: [act_id_3, act_id_1, act_id_2]
-  if (!Array.isArray(ordre)) return res.status(400).json({ message: 'Liste ordre requise' })
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-    for (let i = 0; i < ordre.length; i++) {
-      await client.query('UPDATE admpcs.processus_activite SET actnumord = $1 WHERE act_id = $2', [i + 1, ordre[i]])
-    }
-    await client.query('COMMIT')
-    res.json({ message: 'Ordre mis à jour' })
-  } catch (e) {
-    await client.query('ROLLBACK')
-    throw e
-  } finally {
-    client.release()
-  }
 }))
 
 app.delete('/activites/:id', verifierToken, route(async (req, res) => {
