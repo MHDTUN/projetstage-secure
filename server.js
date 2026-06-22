@@ -357,6 +357,29 @@ app.delete('/contraintes/:id', verifierToken, route(async (req, res) => {
   await pool.query('SELECT admpcs.app_del_act_contrainte($1)', [req.params.id])
   res.json({ message: 'Supprimé' })
 }))
+// ============================================================================
+// CANVAS POSITIONS
+// ============================================================================
+
+// Récupérer toutes les positions d'un workflow
+app.get('/workflows/:id/canvas', verifierToken, route(async (req, res) => {
+  const result = await pool.query(
+    'SELECT act_id, pos_x, pos_y FROM admpcs.canvas_position WHERE wkf_id = $1', [req.params.id])
+  res.json(result.rows)
+}))
+
+// Sauvegarder (ou mettre à jour) la position d'une activité dans un workflow
+app.put('/workflows/:wkfId/canvas/:actId', verifierToken, route(async (req, res) => {
+  const { pos_x, pos_y } = req.body
+  await pool.query(
+    `INSERT INTO admpcs.canvas_position (wkf_id, act_id, pos_x, pos_y)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (wkf_id, act_id)
+     DO UPDATE SET pos_x = EXCLUDED.pos_x, pos_y = EXCLUDED.pos_y`,
+    [req.params.wkfId, req.params.actId, Math.round(pos_x), Math.round(pos_y)]
+  )
+  res.json({ message: 'Position sauvegardée' })
+}))
 
 // ============================================================================
 // 404 + LISTEN
